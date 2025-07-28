@@ -1,0 +1,15 @@
+jar_paths = [
+    "toolkit/content/jar.mn",
+    "browser/base/jar.mn",
+    "toolkit/themes/shared/desktop-jar.inc.mn",
+    "toolkit/themes/osx/global/jar.mn",
+]
+mozbuild_paths = [
+    "layout/style/moz.build",
+]
+component_paths = [
+    "toolkit/content/widgets/moz-*/**/*",
+]
+globals_stylesheets = [
+    "toolkit/themes/shared/design-system/*.css",
+]
