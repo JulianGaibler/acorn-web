@@ -7,6 +7,7 @@ use std::collections::HashMap;
 pub struct CssInlineTransformer<'a> {
     css_replacements: &'a HashMap<String, String>,
     made_replacements: bool,
+    referenced_hrefs: Vec<String>,
 }
 
 impl<'a> CssInlineTransformer<'a> {
@@ -14,6 +15,7 @@ impl<'a> CssInlineTransformer<'a> {
         Self {
             css_replacements,
             made_replacements: false,
+            referenced_hrefs: Vec::new(),
         }
     }
     pub fn build(
@@ -55,7 +57,10 @@ impl<'a> Traverse<'a, ()> for CssInlineTransformer<'a> {
         };
         let super_class_name = super_class_name_string.as_ref().map(|s| s.as_str());
 
-        let mut new_properties: Vec<ClassElement<'a>> = Vec::new(); // Collect new properties here to avoid multiple mutable borrows
+        let mut new_properties: Vec<ClassElement<'a>> = Vec::new();
+
+        // Clear referenced_hrefs for this class
+        self.referenced_hrefs.clear();
 
         // Process all methods in the class
         for element in &mut class.body.body {
@@ -183,7 +188,7 @@ impl<'a> CssInlineTransformer<'a> {
             };
             // Check for stylesheet link tags
             let link_tag_regex =
-                Regex::new(r#"<link[\s\S]*?rel\s*=\s*[\"']stylesheet[\"'][\s\S]*?/?>"#).unwrap();
+                Regex::new(r#"<link[\s\S]*?rel\s*=\s*[\"']stylesheet[\"'][\s\S]*/?>"#).unwrap();
             if !link_tag_regex.is_match(cooked) {
                 continue;
             }
@@ -193,6 +198,11 @@ impl<'a> CssInlineTransformer<'a> {
             };
             if !self.css_replacements.contains_key(&href) {
                 continue;
+            }
+
+            // Track referenced hrefs for this class
+            if !self.referenced_hrefs.contains(&href) {
+                self.referenced_hrefs.push(href.clone());
             }
 
             // Remove the link tag from this template element
@@ -225,12 +235,14 @@ impl<'a> CssInlineTransformer<'a> {
             return; // Already added styles property
         }
 
-        // Combine all CSS replacements into one styles property
+        // Combine only referenced CSS replacements into one styles property
         let mut combined_css = String::new();
-        for (href, css) in self.css_replacements {
-            combined_css.push_str(&format!("/* From {} */\n", href));
-            combined_css.push_str(css);
-            combined_css.push('\n');
+        for href in &self.referenced_hrefs {
+            if let Some(css) = self.css_replacements.get(href) {
+                combined_css.push_str(&format!("/* From {} */\n", href));
+                combined_css.push_str(css);
+                combined_css.push('\n');
+            }
         }
 
         if !combined_css.is_empty() {
