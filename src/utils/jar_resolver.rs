@@ -25,10 +25,21 @@ pub enum JarResolverError {
 }
 
 pub struct JarResolver {
+    /// Maps chrome/resource URLs to their corresponding file system paths.
     mappings: HashMap<String, PathBuf>,
 }
 
 impl JarResolver {
+    /// Constructs a new `JarResolver` by parsing jar.mn and moz.build files.
+    ///
+    /// # Arguments
+    /// * `firefox_dir` - Path to the Firefox source directory.
+    /// * `jar_paths` - List of jar.mn file paths (relative to firefox_dir).
+    /// * `mozbuild_paths` - List of moz.build file paths (relative to firefox_dir).
+    /// * `ifdef_config` - Optional map of preprocessor conditions.
+    ///
+    /// # Returns
+    /// Returns a `JarResolver` with mappings from chrome/resource URLs to file paths.
     pub fn new(
         firefox_dir: &Path,
         jar_paths: &[&str],
@@ -130,10 +141,18 @@ impl JarResolver {
         Ok(JarResolver { mappings })
     }
 
+    /// Checks if a URL is a chrome or resource internal URL.
     pub fn is_internal_url(&self, url: &str) -> bool {
         url.starts_with("chrome://") || url.starts_with("resource://")
     }
 
+    /// Resolves a chrome/resource URL to a file system path.
+    ///
+    /// # Arguments
+    /// * `url` - The chrome or resource URL to resolve.
+    ///
+    /// # Returns
+    /// Returns the corresponding file system path, or an error if not found or invalid.
     pub fn resolve_path(&self, url: &str) -> Result<PathBuf, JarResolverError> {
         if !self.is_internal_url(url) {
             return Err(JarResolverError::InvalidChromeUrl(url.to_string()));
@@ -146,6 +165,7 @@ impl JarResolver {
     }
 }
 
+/// Recursively processes #include directives in jar.mn files.
 fn process_includes(
     content: &str,
     jar_file_path: &Path,
@@ -191,6 +211,7 @@ fn process_includes(
     Ok(result)
 }
 
+/// Parses a moz.build file for CONTENT_ACCESSIBLE_FILES and updates mappings.
 fn parse_mozbuild_file(
     content: &str,
     mozbuild_path: &str,
@@ -248,6 +269,7 @@ fn parse_mozbuild_file(
     Ok(())
 }
 
+/// Helper for parsing the CONTENT_ACCESSIBLE_FILES list in moz.build files.
 fn parse_content_accessible_files(
     lines: &[&str],
     start_idx: usize,
@@ -297,6 +319,7 @@ fn parse_content_accessible_files(
     Ok(i)
 }
 
+/// Parses a comma-separated list of files and updates mappings for resource URLs.
 fn parse_file_list(
     files_str: &str,
     mozbuild_dir: &Path,
@@ -331,6 +354,7 @@ fn parse_file_list(
 }
 
 // Update parse_jar_file and related functions to use PathBuf for mappings
+/// Parses a jar.mn file and updates mappings and chrome registrations.
 fn parse_jar_file(
     content: &str,
     jar_path: &str,
@@ -403,29 +427,26 @@ fn parse_jar_file(
 
         // Handle file mapping lines
         if current_jar.is_some() && line.contains('/') {
-            parse_file_line(
-                line,
-                jar_dir,
-                firefox_dir,
-                current_jar.as_ref().unwrap(),
-                mappings,
-                chrome_registrations,
-            )?;
+            parse_file_line(line, jar_dir, firefox_dir, mappings, chrome_registrations)?;
         }
     }
 
     Ok(())
 }
 
+/// Represents a chrome registration (content, skin, or locale) from a jar.mn file.
 #[derive(Debug, Clone)]
 struct ChromeRegistration {
     registration_type: String,
     package_name: String,
-    provider_name: String,
     path: String,
+    #[allow(dead_code)]
+    provider_name: String,
+    #[allow(dead_code)]
     flags: Vec<String>,
 }
 
+/// Parses a chrome registration line (starting with %) and updates registrations.
 fn parse_registration_line(
     line: &str,
     _jar_dir: &Path, // Marked as unused with an underscore
@@ -491,11 +512,11 @@ fn parse_registration_line(
     Ok(())
 }
 
+/// Parses a file mapping line in a jar.mn file and updates mappings.
 fn parse_file_line(
     line: &str,
     jar_dir: &Path,
     firefox_dir: &Path,
-    current_jar: &str,
     mappings: &mut HashMap<String, PathBuf>,
     chrome_registrations: &HashMap<String, ChromeRegistration>,
 ) -> Result<(), JarResolverError> {
@@ -542,6 +563,7 @@ fn parse_file_line(
     Ok(())
 }
 
+/// Builds a chrome URL from a destination path and chrome registrations.
 fn build_chrome_url(
     destination: &str,
     chrome_registrations: &HashMap<String, ChromeRegistration>,
@@ -584,4 +606,157 @@ fn build_chrome_url(
     }
 
     None
+}
+
+// =====================
+// Unit tests
+// =====================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_is_internal_url() {
+        let test_jr = JarResolver {
+            mappings: HashMap::new(),
+        };
+        assert!(test_jr.is_internal_url("chrome://foo/bar"));
+        assert!(test_jr.is_internal_url("resource://foo/bar"));
+        assert!(!test_jr.is_internal_url("http://example.com"));
+        assert!(!test_jr.is_internal_url("file:///tmp/foo"));
+    }
+
+    #[test]
+    fn test_resolve_path_missing() {
+        let test_jr = JarResolver {
+            mappings: HashMap::new(),
+        };
+        let err = test_jr.resolve_path("chrome://foo/bar").unwrap_err();
+        match err {
+            JarResolverError::NoMappingFound(s) => assert_eq!(s, "chrome://foo/bar"),
+            _ => panic!("Unexpected error variant"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_path_invalid_url() {
+        let test_jr = JarResolver {
+            mappings: HashMap::new(),
+        };
+        let err = test_jr.resolve_path("http://example.com").unwrap_err();
+        match err {
+            JarResolverError::InvalidChromeUrl(s) => assert_eq!(s, "http://example.com"),
+            _ => panic!("Unexpected error variant"),
+        }
+    }
+
+    #[test]
+    fn test_build_chrome_url_content() {
+        let mut regs = HashMap::new();
+        regs.insert(
+            "content:global".to_string(),
+            ChromeRegistration {
+                registration_type: "content".to_string(),
+                package_name: "global".to_string(),
+                provider_name: String::new(),
+                path: "%content/global/".to_string(),
+                flags: vec!["contentaccessible=yes".to_string()],
+            },
+        );
+        // Should match content/global/aboutAbout.js
+        let url = build_chrome_url("content/global/aboutAbout.js", &regs);
+        assert_eq!(
+            url,
+            Some("chrome://global/content/aboutAbout.js".to_string())
+        );
+        // Should not match if path doesn't start with reg path
+        let url2 = build_chrome_url("content/other/file.js", &regs);
+        assert_eq!(url2, None);
+    }
+
+    #[test]
+    fn test_parse_registration_line_content() {
+        let mut regs = HashMap::new();
+        let line = "% content global %content/global/ contentaccessible=yes";
+        let res = parse_registration_line(line, Path::new("."), &mut regs);
+        assert!(res.is_ok());
+        let reg = regs.get("content:global").unwrap();
+        assert_eq!(reg.registration_type, "content");
+        assert_eq!(reg.package_name, "global");
+        assert_eq!(reg.path, "%content/global/");
+        assert!(reg.flags.contains(&"contentaccessible=yes".to_string()));
+    }
+
+    #[test]
+    fn test_parse_file_line_basic() {
+        let mut regs = HashMap::new();
+        regs.insert(
+            "content:global".to_string(),
+            ChromeRegistration {
+                registration_type: "content".to_string(),
+                package_name: "global".to_string(),
+                provider_name: String::new(),
+                path: "%content/global/".to_string(),
+                flags: vec![],
+            },
+        );
+        let mut mappings = HashMap::new();
+        // destination only
+        let res = parse_file_line(
+            "content/global/aboutAbout.js",
+            Path::new("src"),
+            Path::new("firefox"),
+            &mut mappings,
+            &regs,
+        );
+        assert!(res.is_ok());
+        assert!(mappings.contains_key("chrome://global/content/aboutAbout.js"));
+    }
+
+    #[test]
+    fn test_parse_file_line_with_source() {
+        let mut regs = HashMap::new();
+        regs.insert(
+            "skin:global".to_string(),
+            ChromeRegistration {
+                registration_type: "skin".to_string(),
+                package_name: "global".to_string(),
+                provider_name: "classic/1.0".to_string(),
+                path: "%skin/classic/global/".to_string(),
+                flags: vec![],
+            },
+        );
+        let mut mappings = HashMap::new();
+        // destination (source)
+        let res = parse_file_line(
+            "skin/classic/global/icons/eye.svg (../../shared/icons/eye.svg)",
+            Path::new("src"),
+            Path::new("firefox"),
+            &mut mappings,
+            &regs,
+        );
+        assert!(res.is_ok());
+        assert!(mappings.contains_key("chrome://global/skin/icons/eye.svg"));
+    }
+
+    #[test]
+    fn test_parse_file_list_empty_and_basic() {
+        let mut mappings = HashMap::new();
+        let mozbuild_dir = Path::new("src/module");
+        let firefox_dir = Path::new("firefox");
+        // Empty string should not panic
+        let res = parse_file_list("", mozbuild_dir, firefox_dir, &mut mappings);
+        assert!(res.is_ok());
+        // Basic file
+        let res2 = parse_file_list(
+            "'res/close-12.svg'",
+            mozbuild_dir,
+            firefox_dir,
+            &mut mappings,
+        );
+        assert!(res2.is_ok());
+        assert!(mappings.contains_key("resource://content-accessible/close-12.svg"));
+    }
 }

@@ -6,3 +6,4 @@ firefox/
 dist/
 node_modules/
 .vscode/
+storybook-static/

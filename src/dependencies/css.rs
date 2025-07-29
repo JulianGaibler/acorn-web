@@ -96,7 +96,6 @@ impl<'i> Visitor<'i> for UrlVisitor {
 
     fn visit_url(&mut self, url: &mut Url<'i>) -> std::result::Result<(), ()> {
         let url_str = url.url.to_string();
-        println!("Found URL: {}", url_str);
         self.add_dependency(&url_str);
         Ok(())
     }

@@ -51,8 +51,6 @@ impl<'a, 'i> Visitor<'i> for UrlReplacerVisitor<'a> {
             && !base.starts_with("https://")
             && !base.starts_with("//")
         {
-            // print url_replacements
-            eprintln!("Available replacements: {:?}", self.url_replacements);
             return Err(TransformError::UrlNotFound { url: url_str });
         }
         Ok(())

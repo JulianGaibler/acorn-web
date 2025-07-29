@@ -1,6 +1,4 @@
 use crate::utils::jar_resolver::JarResolver;
-use std::collections::HashMap;
-use std::env;
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -8,8 +6,6 @@ use thiserror::Error;
 pub enum PathFinderError {
     #[error("Chrome mapping not found for URL: {0}")]
     ChromeMappingNotFound(String),
-    #[error("Invalid relative path: {0}")]
-    InvalidRelativePath(String),
     #[error("Could not resolve relative path from '{from}' to '{import}'")]
     RelativePathResolutionFailed { from: PathBuf, import: String },
     #[error("Import string is empty")]

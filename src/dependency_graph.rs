@@ -2,43 +2,66 @@ use petgraph::graph::{EdgeIndex, NodeIndex};
 use petgraph::visit::EdgeRef;
 use petgraph::{Directed, Direction, Graph};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
+use crate::utils::file_utils;
+
+/// Represents the type of a file in the dependency graph.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum FileType {
+    /// A JavaScript with a moz-component
     JsComponent,
+    /// A regular JavaScript file
     JsFile,
+    /// A CSS file
     CssFile,
+    /// Any other file type that we just copy over without processing
     OpaqueFile,
 }
 
+/// Represents where a file should be placed in the output distribution.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TargetLocation {
+    /// for the specific component foldeer
     Component(String),
+    /// Global CSS folder
     CssGlobal,
+    /// Asset file folder
     Asset,
+    /// Dependency file folder
     Dependency,
+    /// Omitted from output
     Omit,
 }
 
+/// Node representing a file in the dependency graph.
 #[derive(Debug, Clone)]
 pub struct FileNode {
+    /// Path to the file
     pub path: PathBuf,
+    /// Type of the file
     pub file_type: FileType,
+    /// Where the file should be placed in the output
     pub target_location: TargetLocation,
 }
 
+/// Edge representing an import relationship between files.
 #[derive(Debug, Clone)]
 pub struct ImportEdge {
+    /// The import statement string
     pub import_statement: String,
 }
 
+/// The main dependency graph structure, holding files and their relationships.
 pub struct DependencyGraph {
+    /// The underlying petgraph graph
     graph: Graph<FileNode, ImportEdge, Directed>,
+    /// Maps file paths to node indices for quick lookup
     path_to_index: HashMap<PathBuf, NodeIndex>,
 }
 
 impl FileNode {
+    /// Get the output (dist) path for this file, or None if omitted.
     pub fn get_dist_path(&self) -> Option<PathBuf> {
         // early return if the target location is Omit
         if matches!(self.target_location, TargetLocation::Omit) {
@@ -62,7 +85,7 @@ impl FileNode {
 }
 
 impl DependencyGraph {
-    /// Create a new empty dependency graph
+    /// Create a new empty dependency graph.
     pub fn new() -> Self {
         Self {
             graph: Graph::new(),
@@ -96,7 +119,7 @@ impl DependencyGraph {
         index
     }
 
-    /// Add a dependency between two files. Both files must already exist in the graph.
+    /// Add a dependency (import) between two files. Both files must already exist in the graph.
     /// Returns the EdgeIndex for the new dependency, or an error if either file doesn't exist.
     pub fn add_dependency(
         &mut self,
@@ -114,7 +137,7 @@ impl DependencyGraph {
             .get(to_file)
             .ok_or_else(|| DependencyGraphError::TargetFileNotFound(to_file.clone()))?;
 
-        // Check omit->dependency condition
+        // If the target is Omit and the source is not a JsComponent, mark as Dependency
         let from_file_type = self.graph[*from_idx].file_type.clone();
         let to_target_location_is_omit =
             self.graph[*to_idx].target_location == TargetLocation::Omit;
@@ -129,121 +152,34 @@ impl DependencyGraph {
         Ok(self.graph.add_edge(*from_idx, *to_idx, edge))
     }
 
-    /// Add a file that depends on an existing file in one operation.
-    /// This is a convenience method for the common case of discovering dependencies.
-    pub fn add_dependent_file(
-        &mut self,
-        dependent_path: PathBuf,
-        dependent_file_type: FileType,
-        dependent_target_location: TargetLocation,
-        depends_on: &PathBuf,
-        import_statement: &str,
-    ) -> Result<(NodeIndex, EdgeIndex), DependencyGraphError> {
-        // Add the dependent file first
-        let dependent_idx = self.add_file(
-            dependent_path.clone(),
-            dependent_file_type,
-            dependent_target_location,
-        );
-
-        // Add the dependency
-        let edge_idx = self.add_dependency(&dependent_path, depends_on, import_statement)?;
-
-        Ok((dependent_idx, edge_idx))
-    }
-
-    /// Get a file node by its path
+    /// Get a file node by its path, if it exists in the graph.
     pub fn get_file(&self, file_path: &PathBuf) -> Option<&FileNode> {
         self.path_to_index
             .get(file_path)
             .map(|&idx| &self.graph[idx])
     }
 
-    /// Check if a file exists in the graph
-    pub fn contains_file(&self, file_path: &PathBuf) -> bool {
-        self.path_to_index.contains_key(file_path)
-    }
-
-    /// Get all files in the graph
+    /// Get an iterator over all files in the graph.
     pub fn all_files(&self) -> impl Iterator<Item = &FileNode> {
         self.graph.node_weights()
     }
 
-    /// Check if the graph has any circular dependencies
+    /// Check if the graph has any circular dependencies.
     pub fn has_cycles(&self) -> bool {
         petgraph::algo::is_cyclic_directed(&self.graph)
     }
 
-    /// Get a topological ordering of the files (useful for processing order)
-    /// Returns an error if the graph contains cycles
-    pub fn topological_sort(&self) -> Result<Vec<&FileNode>, DependencyGraphError> {
-        petgraph::algo::toposort(&self.graph, None)
-            .map(|indices| indices.iter().map(|&idx| &self.graph[idx]).collect())
-            .map_err(|_| DependencyGraphError::CircularDependency)
-    }
-
-    /// Get the number of files in the graph
+    /// Get the number of files in the graph.
     pub fn file_count(&self) -> usize {
         self.graph.node_count()
     }
 
-    /// Get the number of dependencies in the graph
+    /// Get the number of dependencies (edges) in the graph.
     pub fn dependency_count(&self) -> usize {
         self.graph.edge_count()
     }
 
-    /// Update the import statement for a specific dependency
-    pub fn update_import_statement(
-        &mut self,
-        from_file: &PathBuf,
-        to_file: &PathBuf,
-        new_import_statement: String,
-    ) -> Result<(), DependencyGraphError> {
-        let from_idx = self
-            .path_to_index
-            .get(from_file)
-            .ok_or_else(|| DependencyGraphError::SourceFileNotFound(from_file.clone()))?;
-
-        let to_idx = self
-            .path_to_index
-            .get(to_file)
-            .ok_or_else(|| DependencyGraphError::TargetFileNotFound(to_file.clone()))?;
-
-        // Find the edge between these two nodes
-        if let Some(edge_idx) = self.graph.find_edge(*from_idx, *to_idx) {
-            if let Some(edge_weight) = self.graph.edge_weight_mut(edge_idx) {
-                edge_weight.import_statement = new_import_statement;
-                Ok(())
-            } else {
-                Err(DependencyGraphError::EdgeNotFound(
-                    from_file.clone(),
-                    to_file.clone(),
-                ))
-            }
-        } else {
-            Err(DependencyGraphError::EdgeNotFound(
-                from_file.clone(),
-                to_file.clone(),
-            ))
-        }
-    }
-
-    /// Remove a file and all its dependencies from the graph
-    pub fn remove_file(&mut self, file_path: &PathBuf) -> Result<FileNode, DependencyGraphError> {
-        let node_idx = self
-            .path_to_index
-            .remove(file_path)
-            .ok_or_else(|| DependencyGraphError::FileNotFound(file_path.clone()))?;
-
-        let node = self
-            .graph
-            .remove_node(node_idx)
-            .ok_or_else(|| DependencyGraphError::FileNotFound(file_path.clone()))?;
-
-        Ok(node)
-    }
-
-    /// Print a debug representation of the entire dependency graph
+    /// Print a debug representation of the entire dependency graph to stdout.
     pub fn debug_print(&self) {
         println!("=== Dependency Graph Debug ===");
         println!(
@@ -269,7 +205,7 @@ impl DependencyGraph {
         println!("=== End Debug ===");
     }
 
-    /// Print files grouped by their target location
+    /// Print files grouped by their target location to stdout.
     fn debug_print_files_by_target(&self) {
         use std::collections::BTreeMap;
 
@@ -306,141 +242,51 @@ impl DependencyGraph {
         }
     }
 
-    /// Print the dependency tree showing relationships
+    /// Print the dependency tree showing relationships to stdout.
     fn debug_print_dependency_tree(&self) {
-        println!("🌳 Dependency Tree:");
+        println!("🌳 Files with dependencies:");
 
-        // Find root nodes (files with no incoming dependencies)
-        let mut root_nodes = Vec::new();
+        // Print only files that have at least one dependency (outgoing edge)
         for (node_idx, file) in self.all_files_with_index() {
-            let incoming_edges: Vec<_> = self
+            // Get direct dependencies (outgoing edges)
+            let mut dependencies: Vec<_> = self
                 .graph
-                .edges_directed(node_idx, Direction::Incoming)
+                .edges_directed(node_idx, Direction::Outgoing)
                 .collect();
-            if incoming_edges.is_empty() {
-                root_nodes.push((node_idx, file));
+            if dependencies.is_empty() {
+                continue;
             }
-        }
 
-        if root_nodes.is_empty() {
-            println!(
-                "  ⚠️  No root nodes found (all files have dependencies - possible circular deps)"
-            );
-            return;
-        }
-
-        // Print each root and its dependencies
-        for (root_idx, root_file) in root_nodes {
-            self.debug_print_node_tree(
-                root_idx,
-                root_file,
-                0,
-                &mut std::collections::HashSet::new(),
-            );
-        }
-    }
-
-    /// Recursively print a node and its dependencies with indentation
-    fn debug_print_node_tree(
-        &self,
-        node_idx: NodeIndex,
-        file: &FileNode,
-        depth: usize,
-        visited: &mut std::collections::HashSet<NodeIndex>,
-    ) {
-        let indent = "  ".repeat(depth);
-        let file_type_icon = match file.file_type {
-            FileType::JsComponent => "🧩",
-            FileType::JsFile => "📜",
-            FileType::CssFile => "🎨",
-            FileType::OpaqueFile => "📄",
-        };
-
-        let cycle_marker = if visited.contains(&node_idx) {
-            " 🔄"
-        } else {
-            ""
-        };
-
-        println!(
-            "{}└─ {} {}{}",
-            indent,
-            file_type_icon,
-            file.path.display(),
-            cycle_marker
-        );
-
-        // Avoid infinite recursion in case of cycles
-        if visited.contains(&node_idx) {
-            return;
-        }
-        visited.insert(node_idx);
-
-        // Print dependencies
-        let mut dependencies: Vec<_> = self
-            .graph
-            .edges_directed(node_idx, Direction::Outgoing)
-            .collect();
-
-        // Sort dependencies by path for consistent output
-        dependencies.sort_by(|a, b| {
-            let a_node = &self.graph[a.target()];
-            let b_node = &self.graph[b.target()];
-            a_node.path.cmp(&b_node.path)
-        });
-
-        for (i, edge) in dependencies.iter().enumerate() {
-            let target_node = &self.graph[edge.target()];
-            let import_stmt = &edge.weight().import_statement;
-            let is_last = i == dependencies.len() - 1;
-
-            println!("{}  └─ 📎 \"{}\"", indent, import_stmt);
-            self.debug_print_node_tree(edge.target(), target_node, depth + 2, visited);
-        }
-
-        visited.remove(&node_idx);
-    }
-
-    /// Print a compact summary of the graph
-    pub fn debug_print_summary(&self) {
-        println!("📊 Graph Summary:");
-        println!(
-            "  Files: {}, Dependencies: {}",
-            self.file_count(),
-            self.dependency_count()
-        );
-
-        let mut type_counts = std::collections::HashMap::new();
-        let mut target_counts = std::collections::HashMap::new();
-
-        for file in self.all_files() {
-            *type_counts.entry(&file.file_type).or_insert(0) += 1;
-            *target_counts.entry(&file.target_location).or_insert(0) += 1;
-        }
-
-        println!("  File Types:");
-        for (file_type, count) in type_counts {
-            let icon = match file_type {
+            let file_type_icon = match file.file_type {
                 FileType::JsComponent => "🧩",
                 FileType::JsFile => "📜",
                 FileType::CssFile => "🎨",
                 FileType::OpaqueFile => "📄",
             };
-            println!("    {} {:?}: {}", icon, file_type, count);
-        }
+            println!("└─ {} {}", file_type_icon, file.path.display());
 
-        println!("  Target Locations:");
-        for (target, count) in target_counts {
-            println!("    {:?}: {}", target, count);
-        }
+            dependencies.sort_by(|a, b| {
+                let a_node = &self.graph[a.target()];
+                let b_node = &self.graph[b.target()];
+                a_node.path.cmp(&b_node.path)
+            });
 
-        if self.has_cycles() {
-            println!("  ⚠️  Circular dependencies detected!");
-        } else {
-            println!("  ✅ No circular dependencies");
+            for edge in dependencies {
+                let target_node = &self.graph[edge.target()];
+                let import_stmt = &edge.weight().import_statement;
+                let target_icon = match target_node.file_type {
+                    FileType::JsComponent => "🧩",
+                    FileType::JsFile => "📜",
+                    FileType::CssFile => "🎨",
+                    FileType::OpaqueFile => "📄",
+                };
+                println!("    └─ 📎 \"{}\"", import_stmt);
+                println!("      -> {} {}", target_icon, target_node.path.display());
+            }
         }
     }
 
+    /// Get all files in the graph, with their node indices.
     fn all_files_with_index(&self) -> Vec<(NodeIndex, &FileNode)> {
         self.graph
             .node_indices()
@@ -448,8 +294,8 @@ impl DependencyGraph {
             .collect()
     }
 
-    /// Get all outgoing dependencies from a file
-    /// Returns a vector of (target_file_path, import_statement) tuples
+    /// Get all outgoing dependencies from a file.
+    /// Returns a vector of (target_file_path, import_statement) tuples.
     pub fn get_file_dependencies(
         &self,
         file_path: &PathBuf,
@@ -474,14 +320,7 @@ impl DependencyGraph {
         Ok(dependencies)
     }
 
-    /// Get the FileNode for a file by path (returns owned data for easier manipulation)
-    pub fn get_file_node(&self, file_path: &PathBuf) -> Option<FileNode> {
-        self.path_to_index
-            .get(file_path)
-            .map(|&idx| self.graph[idx].clone())
-    }
-
-    /// Helper function to get dependencies and compute relative paths
+    /// Helper function to get dependencies and compute relative paths for import replacement.
     pub fn get_dependencies_and_relative_paths(
         &self,
         query_path: &PathBuf,
@@ -504,7 +343,8 @@ impl DependencyGraph {
                 .ok_or_else(|| DependencyGraphError::TargetFileNotFound(target_path.clone()))?;
 
             if let Some(target_dist_path) = target_file.get_dist_path() {
-                let relative_path = compute_relative_path(&current_dist_path, &target_dist_path);
+                let relative_path =
+                    file_utils::compute_relative_path(&current_dist_path, &target_dist_path);
                 replacements.insert(original_import, relative_path);
             }
         }
@@ -512,8 +352,8 @@ impl DependencyGraph {
         Ok(replacements)
     }
 
-    /// Get all import statements that need to be replaced for a specific file
-    /// Returns a vector of (original_import_statement, new_relative_path) tuples
+    /// Get all import statements that need to be replaced for a specific file.
+    /// Returns a map of (original_import_statement, new_relative_path).
     pub fn get_import_replacements(
         &self,
         file_path: &PathBuf,
@@ -521,7 +361,9 @@ impl DependencyGraph {
         self.get_dependencies_and_relative_paths(file_path, file_path)
     }
 
-    pub(crate) fn get_omitted_imports(&self, path: &PathBuf) -> Vec<(String, PathBuf)> {
+    /// Get all outgoing CSS file imports from a file.
+    /// Returns a vector of (import_statement, css_file_path) tuples.
+    pub(crate) fn get_css_imports(&self, path: &PathBuf) -> Vec<(String, PathBuf)> {
         let node_idx = match self.path_to_index.get(path) {
             Some(&idx) => idx,
             None => return vec![], // Return empty if the file is not found
@@ -531,7 +373,7 @@ impl DependencyGraph {
             .edges_directed(node_idx, Direction::Outgoing)
             .filter_map(|edge| {
                 let target_node = &self.graph[edge.target()];
-                if matches!(target_node.target_location, TargetLocation::Omit) {
+                if matches!(target_node.file_type, FileType::CssFile) {
                     Some((
                         edge.weight().import_statement.clone(),
                         target_node.path.clone(),
@@ -544,83 +386,71 @@ impl DependencyGraph {
     }
 }
 
+/// Errors that can occur when working with the dependency graph.
 #[derive(Debug, thiserror::Error)]
 pub enum DependencyGraphError {
+    /// File not found in the graph
     #[error("File not found in graph: {0}")]
     FileNotFound(PathBuf),
-    #[error("Dependency edge not found between '{0}' and '{1}'")]
-    EdgeNotFound(PathBuf, PathBuf),
-    #[error("Circular dependency detected in graph")]
-    CircularDependency,
+    /// Source file for dependency not found
     #[error("Cannot add dependency: source file '{0}' not found")]
     SourceFileNotFound(PathBuf),
+    /// Target file for dependency not found
     #[error("Cannot add dependency: target file '{0}' not found")]
     TargetFileNotFound(PathBuf),
 }
 
-/// Compute the relative path from one file to another
-/// Both paths should be the dist paths (where files will be located)
-fn compute_relative_path(from_path: &Path, to_path: &Path) -> String {
-    // Get the directory containing the from_path file
-    let from_dir = from_path.parent().unwrap_or(Path::new(""));
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
 
-    match pathdiff::diff_paths(to_path, from_dir) {
-        Some(relative_path) => {
-            let rel_str = relative_path.to_string_lossy().replace('\\', "/");
-            if !rel_str.starts_with('.') {
-                // If the path does not start with '.' or '/', it's a same-folder or subfolder import
-                format!("./{}", rel_str)
-            } else {
-                rel_str
-            }
-        }
-        None => {
-            // Fallback: use absolute path if relative path computation fails
-            to_path.to_string_lossy().replace('\\', "/")
-        }
-    }
-}
-
-/// Replace the path in an import statement with a new path
-/// This handles common JavaScript import patterns:
-/// - import { foo } from './old/path'
-/// - import foo from './old/path'
-/// - import './old/path'
-/// - require('./old/path')
-fn replace_import_path(original_import: &str, new_path: &str) -> String {
-    use regex::Regex;
-
-    // Pattern to match import/require statements and capture the path
-    let patterns = [
-        // import ... from 'path' or import ... from "path"
-        r#"(import\s+.*?\s+from\s+)(['"])(.*?)(['"])"#,
-        // import 'path' or import "path"
-        r#"(import\s+)(['"])(.*?)(['"])"#,
-        // require('path') or require("path")
-        r#"(require\s*\(\s*)(['"])(.*?)(['"])\s*\)"#,
-    ];
-
-    for pattern in &patterns {
-        if let Ok(re) = Regex::new(pattern) {
-            if let Some(captures) = re.captures(original_import) {
-                // Preserve the quote style (single or double quotes)
-                let quote_char = captures.get(2).unwrap().as_str();
-                return re
-                    .replace(original_import, |caps: &regex::Captures| {
-                        format!(
-                            "{}{}{}{}",
-                            caps.get(1).unwrap().as_str(),
-                            quote_char,
-                            new_path,
-                            quote_char
-                        )
-                    })
-                    .to_string();
-            }
-        }
+    #[test]
+    fn test_add_file_and_get_file() {
+        let mut graph = DependencyGraph::new();
+        let path = PathBuf::from("src/foo.js");
+        let idx = graph.add_file(path.clone(), FileType::JsFile, TargetLocation::Dependency);
+        let node = graph.get_file(&path).unwrap();
+        assert_eq!(node.path, path);
+        assert_eq!(node.file_type, FileType::JsFile);
+        assert_eq!(node.target_location, TargetLocation::Dependency);
+        // Adding the same file again should return the same index
+        let idx2 = graph.add_file(path.clone(), FileType::CssFile, TargetLocation::Asset);
+        assert_eq!(idx, idx2);
     }
 
-    // If no pattern matched, return the original import
-    // This shouldn't happen if your import statements are well-formed
-    original_import.to_string()
+    #[test]
+    fn test_add_dependency_and_cycle_detection() {
+        let mut graph = DependencyGraph::new();
+        let a = PathBuf::from("a.js");
+        let b = PathBuf::from("b.js");
+        graph.add_file(a.clone(), FileType::JsFile, TargetLocation::Dependency);
+        graph.add_file(b.clone(), FileType::JsFile, TargetLocation::Dependency);
+        let edge = graph.add_dependency(&a, &b, "./b.js");
+        assert!(edge.is_ok());
+        assert!(!graph.has_cycles());
+        // Add a cycle
+        let edge2 = graph.add_dependency(&b, &a, "./a.js");
+        assert!(edge2.is_ok());
+        assert!(graph.has_cycles());
+    }
+
+    #[test]
+    fn test_get_dist_path_omit() {
+        let node = FileNode {
+            path: PathBuf::from("foo.js"),
+            file_type: FileType::JsFile,
+            target_location: TargetLocation::Omit,
+        };
+        assert_eq!(node.get_dist_path(), None);
+    }
+
+    #[test]
+    fn test_get_import_replacements_empty() {
+        let mut graph = DependencyGraph::new();
+        let path = PathBuf::from("foo.js");
+        graph.add_file(path.clone(), FileType::JsFile, TargetLocation::Dependency);
+        let replacements = graph.get_import_replacements(&path).unwrap();
+        assert!(replacements.is_empty());
+    }
 }

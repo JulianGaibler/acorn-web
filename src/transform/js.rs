@@ -10,7 +10,9 @@ use oxc_codegen::Codegen;
 use oxc_traverse::ReusableTraverseCtx;
 
 use crate::errors::{TransformError, TransformResult};
-use crate::transform::js_transform::{CssInlineTransformer, ImportCssTransformer, UrlTransformer};
+use crate::transform::js_transform::{
+    CssInlineTransformer, IconTemplateImportTransformer, ImportCssTransformer, UrlTransformer,
+};
 
 pub fn transform_from_file(
     source_path: &PathBuf,
@@ -70,6 +72,7 @@ pub fn transform_from_string(
         }
     }
     UrlTransformer::new(url_replacements).build(&mut program, &mut ctx);
+    IconTemplateImportTransformer::new(url_replacements).build(&mut program, &mut ctx);
     // Codegen back to JavaScript string
     let codegen = Codegen::new();
     let output = codegen.build(&program);

@@ -12,7 +12,6 @@ use crate::errors::{DependencyError, DependencyResult};
 
 pub fn dependencies_from_file(source_path: &PathBuf) -> DependencyResult<Vec<String>> {
     let source_text = std::fs::read_to_string(source_path)?;
-    // Infer source type (TS/JS/ESM/JSX/etc) based on file extension
     let source_type = SourceType::from_path(source_path).unwrap();
     dependencies_from_string(&source_text, source_type)
 }
@@ -85,6 +84,25 @@ impl DependencyVisitor {
             }
         }
     }
+
+    fn extract_any_link_from_html(&mut self, html_content: &str) {
+        let url_regex =
+            regex::Regex::new(r#"(?:src|href|iconsrc)\s*=\s*[\"']([^\"']+\.[a-zA-Z0-9]+)[\"']"#)
+                .unwrap();
+        for captures in url_regex.captures_iter(html_content) {
+            if let Some(url_match) = captures.get(1) {
+                let url = url_match.as_str().trim();
+                // Only allow relative paths or chrome:// or resource://
+                if (url.starts_with("chrome://") || url.starts_with("resource://"))
+                    || (!url.starts_with("http://")
+                        && !url.starts_with("https://")
+                        && !url.starts_with("www."))
+                {
+                    self.dependencies.push(url.to_string());
+                }
+            }
+        }
+    }
 }
 
 impl<'a> Visit<'a> for DependencyVisitor {
@@ -96,5 +114,12 @@ impl<'a> Visit<'a> for DependencyVisitor {
         // If the template element contains HTML, extract CSS links
         let value = &element.value;
         self.extract_css_links_from_html(&value.raw);
+        self.extract_any_link_from_html(&value.raw);
+    }
+
+    fn visit_string_literal(&mut self, it: &StringLiteral<'a>) {
+        if it.value.starts_with("chrome://") || it.value.starts_with("resource://") {
+            self.extract_string_literal(it);
+        }
     }
 }

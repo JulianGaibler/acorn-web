@@ -75,7 +75,6 @@ pub fn transform_lib(
     println!("Transforming and writing files...");
     transform_and_write_files(&mut dep_graph, &output_dir)?;
 
-    // println!("Library transformation completed successfully!");
     Ok(())
 }
 
@@ -186,13 +185,7 @@ fn process_dependencies(dep_graph: &mut DependencyGraph, path_finder: &PathFinde
             _ => vec![],
         };
 
-        // debug print for css files
-        if file.file_type == FileType::CssFile {
-            println!("Processing CSS file: {:?} - {:#?}", file.path, deps);
-        }
-
         for dep in deps {
-            println!("Processing dependency: {}", dep);
             // Resolve the dependency path
             let resolved_path = match path_finder.get_path(&file.path, &dep) {
                 Ok(p) => p,
@@ -218,16 +211,12 @@ fn process_dependencies(dep_graph: &mut DependencyGraph, path_finder: &PathFinde
                 Path::new(&dep).extension().and_then(|s| s.to_str()),
             ) {
                 (FileType::JsComponent, Some("css")) => TargetLocation::Omit,
+                (FileType::JsFile, Some("css")) => TargetLocation::Omit,
                 (_, Some("png") | Some("jpg") | Some("jpeg") | Some("svg")) => {
                     TargetLocation::Asset
                 }
                 _ => TargetLocation::Dependency,
             };
-
-            println!(
-                "Resolved dependency: {} -> {:?} (type: {:?}, target: {:?})",
-                dep, resolved_path, dep_file_type, dep_target_location
-            );
 
             // Add file to dependency graph; if it is new, push to to_process
             dep_graph.add_file(resolved_path.clone(), dep_file_type, dep_target_location);
@@ -261,7 +250,6 @@ fn transform_and_write_files(dep_graph: &mut DependencyGraph, output_dir: &Path)
         let output_path = match file.get_dist_path() {
             Some(path) => output_dir.join(path),
             None => {
-                println!("Skipping file with no output path: {:?}", file.path);
                 continue;
             }
         };
@@ -278,8 +266,10 @@ fn transform_and_write_files(dep_graph: &mut DependencyGraph, output_dir: &Path)
                 let relative_imports = dep_graph.get_import_replacements(&file.path).unwrap();
 
                 // if FileType::JsComponent, call dep_graph.get_omitted_imports(&file.path) and pass it as css_replacements, oterwise None
-                let css_replacements = if file.file_type == FileType::JsComponent {
-                    let omitted_imports = dep_graph.get_omitted_imports(&file.path);
+                let css_replacements = if file.file_type == FileType::JsComponent
+                    || file.file_type == FileType::JsFile
+                {
+                    let omitted_imports = dep_graph.get_css_imports(&file.path);
                     // omitted imports is a Vec<(String, PathBuf)> of css files. We load the files, trnsform them like any other css file,
                     // and then return a HashMap<String, String> where the key is the original path and the value is the transformed CSS code.
                     let mut css_replacements = HashMap::new();
