@@ -1,140 +1,24 @@
-use std::collections::HashMap;
-use std::fs;
-use std::path::PathBuf;
-
-use oxc::allocator::Allocator;
 use oxc::ast::ast::{
-    ClassElement, Expression, ImportDeclaration, PropertyKey, Statement, TaggedTemplateExpression,
-    TemplateLiteral,
+    ClassElement, Expression, PropertyKey, Statement, TaggedTemplateExpression, TemplateLiteral,
 };
-use oxc::parser::{Parser, ParserReturn};
-use oxc::semantic::{SemanticBuilder, SemanticBuilderReturn};
-use oxc::span::{SPAN, SourceType};
-use oxc_codegen::Codegen;
+use oxc::span::SPAN;
 use oxc_traverse::{ReusableTraverseCtx, Traverse, TraverseCtx};
 use regex::Regex;
+use std::collections::HashMap;
 
-pub fn transform_js_urls(
-    source_path: &PathBuf,
-    url_replacements: HashMap<String, String>,
-    css_replacements: Option<HashMap<String, String>>,
-) -> Result<String, String> {
-    // Step 1: Read source file
-    let source_code =
-        fs::read_to_string(source_path).map_err(|e| format!("Failed to read file: {}", e))?;
-
-    // Step 2: Prepare allocator and parser
-    let allocator = Allocator::default();
-    let source_type = SourceType::default().with_module(true);
-    let parser = Parser::new(&allocator, &source_code, source_type);
-    let ParserReturn {
-        mut program,
-        errors: parser_errors,
-        panicked,
-        ..
-    } = parser.parse();
-
-    if panicked {
-        for error in &parser_errors {
-            println!("{error:?}");
-            panic!("Parsing failed.");
-        }
-    }
-
-    let SemanticBuilderReturn {
-        semantic,
-        errors: semantic_errors,
-    } = SemanticBuilder::new()
-        .with_check_syntax_error(true) // Enable extra syntax error checking
-        .with_build_jsdoc(true) // Enable JSDoc parsing
-        .with_cfg(true) // Build a Control Flow Graph
-        .build(&program); // Produce the `Semantic`
-
-    if !semantic_errors.is_empty() {
-        for error in semantic_errors {
-            eprintln!("{error:?}");
-            panic!("Failed to build Semantic for Counter component.");
-        }
-    }
-    let scoping = semantic.into_scoping();
-
-    // if file ends with "moz-breadcrumb-group.mjs", print the AST
-    // if source_path.ends_with("moz-breadcrumb-group.mjs") {
-    //     println!("AST for file: {:?}", source_path);
-    //     println!("{:#?}", program);
-    // }
-
-    let mut ctx = ReusableTraverseCtx::new((), scoping, &allocator);
-
-    // Step 3: Traverse the AST to transform URLs
-    if let Some(css_replacements) = css_replacements {
-        let made_replacements =
-            CssInlineTransformer::new(css_replacements).build(&mut program, &mut ctx);
-        if made_replacements {
-            ImportCssTransformer::new().build(&mut program, &mut ctx);
-        }
-    }
-    UrlTransformer::new(url_replacements).build(&mut program, &mut ctx);
-    // Step 4: Codegen back to JavaScript string
-    let codegen = Codegen::new();
-    let output = codegen.build(&program);
-
-    Ok(output.code)
-}
-
-struct UrlTransformer {
-    url_replacements: HashMap<String, String>,
-}
-
-impl UrlTransformer {
-    fn new(url_replacements: HashMap<String, String>) -> Self {
-        Self { url_replacements }
-    }
-
-    fn build<'a>(
-        &mut self,
-        program: &mut oxc::ast::ast::Program<'a>,
-        ctx: &mut ReusableTraverseCtx<'a, ()>,
-    ) {
-        oxc_traverse::traverse_mut_with_ctx(self, program, ctx);
-    }
-}
-
-impl<'a> Traverse<'a, ()> for UrlTransformer {
-    fn enter_import_declaration(
-        &mut self,
-        node: &mut ImportDeclaration<'a>,
-        ctx: &mut TraverseCtx<'a, ()>,
-    ) {
-        // replace node.source with the transformed URL
-        let value = node.source.value.as_str();
-
-        // ignore if value == "lit.all.mjs"
-        if value == "lit.all.mjs" {
-            return;
-        }
-
-        if let Some(replacement) = self.url_replacements.get(value) {
-            node.source.value = ctx.ast.atom_from_strs_array([replacement.as_str()]);
-        } else {
-            panic!("URL replacement not found for: {}", value);
-        }
-    }
-}
-
-struct CssInlineTransformer {
-    css_replacements: HashMap<String, String>,
+pub struct CssInlineTransformer<'a> {
+    css_replacements: &'a HashMap<String, String>,
     made_replacements: bool,
 }
 
-impl CssInlineTransformer {
-    fn new(css_replacements: HashMap<String, String>) -> Self {
+impl<'a> CssInlineTransformer<'a> {
+    pub fn new(css_replacements: &'a HashMap<String, String>) -> Self {
         Self {
             css_replacements,
             made_replacements: false,
         }
     }
-    fn build<'a>(
+    pub fn build(
         &mut self,
         program: &mut oxc::ast::ast::Program<'a>,
         ctx: &mut ReusableTraverseCtx<'a, ()>,
@@ -159,7 +43,7 @@ impl CssInlineTransformer {
     }
 }
 
-impl<'a> Traverse<'a, ()> for CssInlineTransformer {
+impl<'a> Traverse<'a, ()> for CssInlineTransformer<'a> {
     fn enter_class(&mut self, class: &mut oxc::ast::ast::Class<'a>, ctx: &mut TraverseCtx<'a, ()>) {
         let mut new_properties: Vec<ClassElement<'a>> = Vec::new(); // Collect new properties here to avoid multiple mutable borrows
 
@@ -205,8 +89,8 @@ impl<'a> Traverse<'a, ()> for CssInlineTransformer {
     }
 }
 
-impl CssInlineTransformer {
-    fn process_statement<'a>(
+impl<'a> CssInlineTransformer<'a> {
+    fn process_statement(
         &mut self,
         stmt: &mut Statement<'a>,
         ctx: &mut TraverseCtx<'a, ()>,
@@ -233,7 +117,7 @@ impl CssInlineTransformer {
         }
     }
 
-    fn process_expression<'a>(
+    fn process_expression(
         &mut self,
         expr: &mut Expression<'a>,
         ctx: &mut TraverseCtx<'a, ()>,
@@ -281,7 +165,7 @@ impl CssInlineTransformer {
         }
     }
 
-    fn process_html_template<'a>(
+    fn process_html_template(
         &mut self,
         template: &mut TemplateLiteral<'a>,
         ctx: &mut TraverseCtx<'a, ()>,
@@ -319,7 +203,7 @@ impl CssInlineTransformer {
         found_replacement
     }
 
-    fn add_styles_property<'a>(
+    fn add_styles_property(
         &mut self,
         ctx: &mut TraverseCtx<'a, ()>,
         new_properties: &mut Vec<ClassElement<'a>>,
@@ -338,7 +222,7 @@ impl CssInlineTransformer {
 
         // Combine all CSS replacements into one styles property
         let mut combined_css = String::new();
-        for (href, css) in &self.css_replacements {
+        for (href, css) in self.css_replacements {
             combined_css.push_str(&format!("/* From {} */\n", href));
             combined_css.push_str(css);
             combined_css.push('\n');
@@ -376,7 +260,7 @@ impl CssInlineTransformer {
                     ctx.ast.alloc(tagged_template_expression),
                 )),
                 false, // computed
-                false, // static
+                true,  // static
                 false, // declare
                 false, // override
                 false, // optional
@@ -387,67 +271,6 @@ impl CssInlineTransformer {
             new_properties.push(oxc::ast::ast::ClassElement::PropertyDefinition(
                 ctx.ast.alloc(property_definition),
             ));
-        }
-    }
-}
-
-struct ImportCssTransformer;
-
-impl ImportCssTransformer {
-    fn new() -> Self {
-        Self
-    }
-
-    fn build<'a>(
-        &mut self,
-        program: &mut oxc::ast::ast::Program<'a>,
-        ctx: &mut ReusableTraverseCtx<'a, ()>,
-    ) {
-        oxc_traverse::traverse_mut_with_ctx(self, program, ctx);
-    }
-}
-
-impl<'a> Traverse<'a, ()> for ImportCssTransformer {
-    fn enter_import_declaration(
-        &mut self,
-        node: &mut ImportDeclaration<'a>,
-        ctx: &mut TraverseCtx<'a, ()>,
-    ) {
-        let value = node.source.value.as_str();
-
-        // Check if the import source ends with "lit.all.mjs"
-        if !value.ends_with("lit.all.mjs") {
-            return;
-        }
-        // Check if "css" is already in the specifiers
-        let css_already_imported = node.specifiers.as_ref().map_or(false, |specs| {
-            specs.iter().any(|spec| {
-                if let oxc::ast::ast::ImportDeclarationSpecifier::ImportSpecifier(specific) = spec {
-                    specific.imported.name() == "css"
-                } else {
-                    false
-                }
-            })
-        });
-
-        if !css_already_imported {
-            // Add "css" to the specifiers
-            let css_export_name = oxc::ast::ast::ModuleExportName::IdentifierName(
-                ctx.ast.identifier_name(SPAN, "css")
-            );
-            let css_binding_ident = ctx.ast.binding_identifier(SPAN, "css");
-            let import_specifier = ctx.ast.import_specifier(
-                SPAN,
-                css_export_name,
-                css_binding_ident,
-                oxc::ast::ast::ImportOrExportKind::Value,
-            );
-            node
-                .specifiers
-                .get_or_insert_with(|| ctx.ast.vec_with_capacity(0))
-                .push(oxc::ast::ast::ImportDeclarationSpecifier::ImportSpecifier(
-                    ctx.ast.alloc(import_specifier)
-                ));
         }
     }
 }

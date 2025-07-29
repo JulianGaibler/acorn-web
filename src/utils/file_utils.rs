@@ -1,6 +1,15 @@
-use anyhow::{Context, Result};
-use std::path::{Path, PathBuf};
+use thiserror::Error;
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("Custom error: {0}")]
+    Custom(String),
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
 use std::env;
+use std::path::{Path, PathBuf};
 
 /// Returns a PathBuf that is relative to the current working directory (CWD).
 /// If the given path cannot be made relative, it returns the original path.
@@ -12,13 +21,14 @@ pub fn make_relative_to_cwd(path: &PathBuf) -> PathBuf {
 
 pub fn create_output_directories(output_dir: &Path) -> Result<()> {
     let dirs = ["components", "styles", "assets", "dependencies"];
-    
+
     for dir in &dirs {
         let dir_path = output_dir.join(dir);
-        std::fs::create_dir_all(&dir_path)
-            .with_context(|| format!("Failed to create directory: {:?}", dir_path))?;
+        std::fs::create_dir_all(&dir_path).map_err(|e| {
+            Error::Custom(format!("Failed to create directory: {:?}: {e}", dir_path))
+        })?;
     }
-    
+
     Ok(())
 }
 
@@ -26,42 +36,52 @@ pub fn copy_file_if_newer(src: &Path, dest: &Path) -> Result<bool> {
     if !src.exists() {
         return Ok(false);
     }
-    
+
     // Create parent directory if it doesn't exist
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create directory: {:?}", parent))?;
+            .map_err(|e| Error::Custom(format!("Failed to create directory: {:?}: {e}", parent)))?;
     }
-    
+
     // Check if we need to copy (dest doesn't exist or src is newer)
     let should_copy = if dest.exists() {
-        let src_modified = src.metadata()
-            .with_context(|| format!("Failed to get metadata for: {:?}", src))?
+        let src_modified = src
+            .metadata()
+            .map_err(|e| Error::Custom(format!("Failed to get metadata for: {:?}: {e}", src)))?
             .modified()
-            .with_context(|| format!("Failed to get modified time for: {:?}", src))?;
-            
-        let dest_modified = dest.metadata()
-            .with_context(|| format!("Failed to get metadata for: {:?}", dest))?
+            .map_err(|e| {
+                Error::Custom(format!("Failed to get modified time for: {:?}: {e}", src))
+            })?;
+
+        let dest_modified = dest
+            .metadata()
+            .map_err(|e| Error::Custom(format!("Failed to get metadata for: {:?}: {e}", dest)))?
             .modified()
-            .with_context(|| format!("Failed to get modified time for: {:?}", dest))?;
-            
+            .map_err(|e| {
+                Error::Custom(format!("Failed to get modified time for: {:?}: {e}", dest))
+            })?;
+
         src_modified > dest_modified
     } else {
         true
     };
-    
+
     if should_copy {
-        std::fs::copy(src, dest)
-            .with_context(|| format!("Failed to copy file from {:?} to {:?}", src, dest))?;
+        std::fs::copy(src, dest).map_err(|e| {
+            Error::Custom(format!(
+                "Failed to copy file from {:?} to {:?}: {e}",
+                src, dest
+            ))
+        })?;
     }
-    
+
     Ok(should_copy)
 }
 
 pub fn ensure_directory_exists(path: &Path) -> Result<()> {
     if !path.exists() {
         std::fs::create_dir_all(path)
-            .with_context(|| format!("Failed to create directory: {:?}", path))?;
+            .map_err(|e| Error::Custom(format!("Failed to create directory: {:?}: {e}", path)))?;
     }
     Ok(())
 }
@@ -106,7 +126,18 @@ pub fn is_text_file(path: &Path) -> bool {
     if let Some(extension) = path.extension().and_then(|ext| ext.to_str()) {
         matches!(
             extension.to_lowercase().as_str(),
-            "js" | "mjs" | "ts" | "tsx" | "css" | "scss" | "less" | "html" | "htm" | "xml" | "json" | "txt" | "md"
+            "js" | "mjs"
+                | "ts"
+                | "tsx"
+                | "css"
+                | "scss"
+                | "less"
+                | "html"
+                | "htm"
+                | "xml"
+                | "json"
+                | "txt"
+                | "md"
         )
     } else {
         false
@@ -130,9 +161,10 @@ pub fn read_file_with_fallback_encoding(path: &Path) -> Result<String> {
         Ok(content) => Ok(content),
         Err(_) => {
             // Fallback: read as bytes and try to convert
-            let bytes = std::fs::read(path)
-                .with_context(|| format!("Failed to read file as bytes: {:?}", path))?;
-            
+            let bytes = std::fs::read(path).map_err(|e| {
+                Error::Custom(format!("Failed to read file as bytes: {:?}: {e}", path))
+            })?;
+
             // Try to decode as UTF-8, replacing invalid sequences
             Ok(String::from_utf8_lossy(&bytes).into_owned())
         }
@@ -141,8 +173,9 @@ pub fn read_file_with_fallback_encoding(path: &Path) -> Result<String> {
 
 pub(crate) fn clear_directory(output_dir: &Path) -> Result<()> {
     if output_dir.exists() {
-        std::fs::remove_dir_all(output_dir)
-            .with_context(|| format!("Failed to clear directory: {:?}", output_dir))?;
+        std::fs::remove_dir_all(output_dir).map_err(|e| {
+            Error::Custom(format!("Failed to clear directory: {:?}: {e}", output_dir))
+        })?;
     }
     Ok(())
 }

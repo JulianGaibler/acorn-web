@@ -50,7 +50,9 @@ impl FileNode {
         };
 
         match &self.target_location {
-            TargetLocation::Component(name) => Some(PathBuf::from(format!("components/{}/{}", name, filename))),
+            TargetLocation::Component(name) => {
+                Some(PathBuf::from(format!("components/{}/{}", name, filename)))
+            }
             TargetLocation::CssGlobal => Some(PathBuf::from(format!("styles/{}", filename))),
             TargetLocation::Asset => Some(PathBuf::from(format!("assets/{}", filename))),
             TargetLocation::Dependency => Some(PathBuf::from(format!("dependencies/{}", filename))),
@@ -114,12 +116,15 @@ impl DependencyGraph {
 
         // Check omit->dependency condition
         let from_file_type = self.graph[*from_idx].file_type.clone();
-        let to_target_location_is_omit = self.graph[*to_idx].target_location == TargetLocation::Omit;
+        let to_target_location_is_omit =
+            self.graph[*to_idx].target_location == TargetLocation::Omit;
         if from_file_type != FileType::JsComponent && to_target_location_is_omit {
             self.graph[*to_idx].target_location = TargetLocation::Dependency;
         }
 
-        let edge = ImportEdge { import_statement: import_statement.to_string() };
+        let edge = ImportEdge {
+            import_statement: import_statement.to_string(),
+        };
 
         Ok(self.graph.add_edge(*from_idx, *to_idx, edge))
     }
@@ -437,12 +442,18 @@ impl DependencyGraph {
     }
 
     fn all_files_with_index(&self) -> Vec<(NodeIndex, &FileNode)> {
-        self.graph.node_indices().map(|idx| (idx, &self.graph[idx])).collect()
+        self.graph
+            .node_indices()
+            .map(|idx| (idx, &self.graph[idx]))
+            .collect()
     }
 
     /// Get all outgoing dependencies from a file
     /// Returns a vector of (target_file_path, import_statement) tuples
-    pub fn get_file_dependencies(&self, file_path: &PathBuf) -> Result<Vec<(PathBuf, String)>, DependencyGraphError> {
+    pub fn get_file_dependencies(
+        &self,
+        file_path: &PathBuf,
+    ) -> Result<Vec<(PathBuf, String)>, DependencyGraphError> {
         let node_idx = self
             .path_to_index
             .get(file_path)
@@ -453,7 +464,10 @@ impl DependencyGraph {
             .edges_directed(*node_idx, Direction::Outgoing)
             .map(|edge| {
                 let target_node = &self.graph[edge.target()];
-                (target_node.path.clone(), edge.weight().import_statement.clone())
+                (
+                    target_node.path.clone(),
+                    edge.weight().import_statement.clone(),
+                )
             })
             .collect();
 
@@ -473,17 +487,20 @@ impl DependencyGraph {
         query_path: &PathBuf,
         relative_from_path: &PathBuf,
     ) -> Result<HashMap<String, String>, DependencyGraphError> {
-        let current_file = self.get_file(relative_from_path)
+        let current_file = self
+            .get_file(relative_from_path)
             .ok_or_else(|| DependencyGraphError::FileNotFound(relative_from_path.clone()))?;
 
-        let current_dist_path = current_file.get_dist_path()
+        let current_dist_path = current_file
+            .get_dist_path()
             .ok_or_else(|| DependencyGraphError::FileNotFound(relative_from_path.clone()))?;
 
         let dependencies = self.get_file_dependencies(query_path)?;
         let mut replacements = HashMap::new();
 
         for (target_path, original_import) in dependencies {
-            let target_file = self.get_file(&target_path)
+            let target_file = self
+                .get_file(&target_path)
                 .ok_or_else(|| DependencyGraphError::TargetFileNotFound(target_path.clone()))?;
 
             if let Some(target_dist_path) = target_file.get_dist_path() {
@@ -497,10 +514,13 @@ impl DependencyGraph {
 
     /// Get all import statements that need to be replaced for a specific file
     /// Returns a vector of (original_import_statement, new_relative_path) tuples
-    pub fn get_import_replacements(&self, file_path: &PathBuf) -> Result<HashMap<String, String>, DependencyGraphError> {
+    pub fn get_import_replacements(
+        &self,
+        file_path: &PathBuf,
+    ) -> Result<HashMap<String, String>, DependencyGraphError> {
         self.get_dependencies_and_relative_paths(file_path, file_path)
     }
-    
+
     pub(crate) fn get_omitted_imports(&self, path: &PathBuf) -> Vec<(String, PathBuf)> {
         let node_idx = match self.path_to_index.get(path) {
             Some(&idx) => idx,
@@ -512,7 +532,10 @@ impl DependencyGraph {
             .filter_map(|edge| {
                 let target_node = &self.graph[edge.target()];
                 if matches!(target_node.target_location, TargetLocation::Omit) {
-                    Some((edge.weight().import_statement.clone(), target_node.path.clone()))
+                    Some((
+                        edge.weight().import_statement.clone(),
+                        target_node.path.clone(),
+                    ))
                 } else {
                     None
                 }
@@ -535,18 +558,21 @@ pub enum DependencyGraphError {
     TargetFileNotFound(PathBuf),
 }
 
-
 /// Compute the relative path from one file to another
 /// Both paths should be the dist paths (where files will be located)
 fn compute_relative_path(from_path: &Path, to_path: &Path) -> String {
     // Get the directory containing the from_path file
     let from_dir = from_path.parent().unwrap_or(Path::new(""));
-    
-    // Compute relative path from from_dir to to_path
+
     match pathdiff::diff_paths(to_path, from_dir) {
         Some(relative_path) => {
-            // Convert to forward slashes for JavaScript imports
-            relative_path.to_string_lossy().replace('\\', "/")
+            let rel_str = relative_path.to_string_lossy().replace('\\', "/");
+            if !rel_str.starts_with('.') {
+                // If the path does not start with '.' or '/', it's a same-folder or subfolder import
+                format!("./{}", rel_str)
+            } else {
+                rel_str
+            }
         }
         None => {
             // Fallback: use absolute path if relative path computation fails
@@ -563,7 +589,7 @@ fn compute_relative_path(from_path: &Path, to_path: &Path) -> String {
 /// - require('./old/path')
 fn replace_import_path(original_import: &str, new_path: &str) -> String {
     use regex::Regex;
-    
+
     // Pattern to match import/require statements and capture the path
     let patterns = [
         // import ... from 'path' or import ... from "path"
@@ -573,24 +599,27 @@ fn replace_import_path(original_import: &str, new_path: &str) -> String {
         // require('path') or require("path")
         r#"(require\s*\(\s*)(['"])(.*?)(['"])\s*\)"#,
     ];
-    
+
     for pattern in &patterns {
         if let Ok(re) = Regex::new(pattern) {
             if let Some(captures) = re.captures(original_import) {
                 // Preserve the quote style (single or double quotes)
                 let quote_char = captures.get(2).unwrap().as_str();
-                return re.replace(original_import, |caps: &regex::Captures| {
-                    format!("{}{}{}{}", 
-                        caps.get(1).unwrap().as_str(),
-                        quote_char,
-                        new_path,
-                        quote_char
-                    )
-                }).to_string();
+                return re
+                    .replace(original_import, |caps: &regex::Captures| {
+                        format!(
+                            "{}{}{}{}",
+                            caps.get(1).unwrap().as_str(),
+                            quote_char,
+                            new_path,
+                            quote_char
+                        )
+                    })
+                    .to_string();
             }
         }
     }
-    
+
     // If no pattern matched, return the original import
     // This shouldn't happen if your import statements are well-formed
     original_import.to_string()

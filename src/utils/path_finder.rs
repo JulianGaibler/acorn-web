@@ -31,30 +31,42 @@ impl PathFinder {
     }
 
     /// Resolve an import string to a PathBuf relative to the current working directory
-    /// 
+    ///
     /// # Arguments
     /// * `current_file` - The file that contains the import statement
     /// * `import_string` - The import string to resolve (e.g., "./utils.js", "chrome://resources/...")
-    /// 
+    ///
     /// # Returns
     /// The resolved PathBuf
-    pub fn get_path(&self, current_file: &PathBuf, import_string: &str) -> Result<PathBuf, PathFinderError> {
+    pub fn get_path(
+        &self,
+        current_file: &PathBuf,
+        import_string: &str,
+    ) -> Result<PathBuf, PathFinderError> {
         let import_string = import_string.trim();
-        
+
         if import_string.is_empty() {
             return Err(PathFinderError::EmptyImportString);
         }
 
         let resolved_path = if self.jar_resolver.is_internal_url(import_string) {
-            self.jar_resolver.resolve_path(import_string).map_err(|e| match e {
-                crate::utils::jar_resolver::JarResolverError::InvalidChromeUrl(url) => PathFinderError::UnsupportedImportFormat(url),
-                crate::utils::jar_resolver::JarResolverError::NoMappingFound(url) => PathFinderError::ChromeMappingNotFound(url),
-                _ => PathFinderError::UnsupportedImportFormat(import_string.to_string()),
-            })?
+            self.jar_resolver
+                .resolve_path(import_string)
+                .map_err(|e| match e {
+                    crate::utils::jar_resolver::JarResolverError::InvalidChromeUrl(url) => {
+                        PathFinderError::UnsupportedImportFormat(url)
+                    }
+                    crate::utils::jar_resolver::JarResolverError::NoMappingFound(url) => {
+                        PathFinderError::ChromeMappingNotFound(url)
+                    }
+                    _ => PathFinderError::UnsupportedImportFormat(import_string.to_string()),
+                })?
         } else if self.is_relative_path(import_string) {
             self.resolve_relative_path(current_file, import_string)?
         } else {
-            return Err(PathFinderError::UnsupportedImportFormat(import_string.to_string()));
+            return Err(PathFinderError::UnsupportedImportFormat(
+                import_string.to_string(),
+            ));
         };
 
         // Convert to relative path from current working directory using file_utils
@@ -84,12 +96,18 @@ impl PathFinder {
     }
 
     /// Resolve a relative path based on the current file location
-    fn resolve_relative_path(&self, current_file: &PathBuf, import_string: &str) -> Result<PathBuf, PathFinderError> {
-        let current_dir = current_file.parent()
-            .ok_or_else(|| PathFinderError::RelativePathResolutionFailed {
-                from: current_file.clone(),
-                import: import_string.to_string(),
-            })?;
+    fn resolve_relative_path(
+        &self,
+        current_file: &PathBuf,
+        import_string: &str,
+    ) -> Result<PathBuf, PathFinderError> {
+        let current_dir =
+            current_file
+                .parent()
+                .ok_or_else(|| PathFinderError::RelativePathResolutionFailed {
+                    from: current_file.clone(),
+                    import: import_string.to_string(),
+                })?;
 
         // Handle different relative path formats
         let resolved = if import_string.starts_with('/') {
@@ -101,7 +119,8 @@ impl PathFinder {
         };
 
         // Canonicalize to resolve .. and . components
-        let canonical = resolved.canonicalize()
+        let canonical = resolved
+            .canonicalize()
             .or_else(|_| {
                 // If canonicalize fails, try manual resolution
                 self.manually_resolve_path(&resolved)
@@ -118,7 +137,7 @@ impl PathFinder {
     /// This handles cases where the file might not exist yet but we still want to resolve the path
     fn manually_resolve_path(&self, path: &PathBuf) -> Result<PathBuf, std::io::Error> {
         let mut components = Vec::new();
-        
+
         for component in path.components() {
             match component {
                 std::path::Component::CurDir => {

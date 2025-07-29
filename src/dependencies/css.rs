@@ -1,18 +1,64 @@
 use lightningcss::{
-    dependencies::{Dependency, ImportDependency, UrlDependency},
-    properties::Property,
     rules::CssRule,
     stylesheet::{ParserOptions, StyleSheet},
-    values::{
-        image::{self, Image},
-        url::Url,
-    },
+    values::url::Url,
     visitor::{Visit, VisitTypes, Visitor},
 };
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+use crate::errors::{DependencyError, DependencyResult};
+
+pub fn dependencies_from_file(source_path: &PathBuf) -> DependencyResult<Vec<String>> {
+    let css_content = fs::read_to_string(source_path)?;
+    dependencies_from_string(&css_content)
+}
+pub fn dependencies_from_string(css_content: &String) -> DependencyResult<Vec<String>> {
+    // Parse the CSS using StyleSheet::parse
+    let mut stylesheet = StyleSheet::parse(
+        &css_content,
+        ParserOptions {
+            ..Default::default()
+        },
+    )
+    .map_err(|e| DependencyError::CssParse {
+        message: format!("{:?}", e),
+    })?;
+
+    // Create visitors to collect dependencies
+    let mut url_visitor = UrlVisitor::new();
+    let mut rule_visitor = RuleVisitor::new();
+
+    // Visit the stylesheet to collect URL dependencies
+    stylesheet
+        .visit(&mut url_visitor)
+        .map_err(|_| DependencyError::Extract {
+            message: "URL visiting failed".to_string(),
+        })?;
+
+    // Visit the stylesheet to collect rule dependencies
+    stylesheet
+        .visit(&mut rule_visitor)
+        .map_err(|_| DependencyError::Extract {
+            message: "Rule visiting failed".to_string(),
+        })?;
+
+    // Combine and return all dependencies
+    let mut dependencies: Vec<String> = url_visitor
+        .dependencies
+        .into_iter()
+        .filter(|dep| !dep.is_empty())
+        .collect();
+
+    dependencies.extend(
+        rule_visitor
+            .dependencies
+            .into_iter()
+            .filter(|dep| !dep.is_empty()),
+    );
+
+    Ok(dependencies)
+}
 
 struct UrlVisitor {
     dependencies: Vec<String>,
@@ -105,49 +151,4 @@ impl<'i> Visitor<'i> for RuleVisitor {
     fn visit_types(&self) -> VisitTypes {
         lightningcss::visit_types!(RULES)
     }
-}
-
-pub fn parse_css_dependencies(source_path: &PathBuf) -> Result<Vec<String>> {
-    // Read the CSS file
-    let css_content = fs::read_to_string(source_path)?;
-
-    // Parse the CSS using StyleSheet::parse
-    let mut stylesheet = StyleSheet::parse(
-        &css_content,
-        ParserOptions {
-            filename: source_path.to_string_lossy().to_string(),
-            ..Default::default()
-        },
-    )
-    .unwrap();
-
-    // Create visitors to collect dependencies
-    let mut url_visitor = UrlVisitor::new();
-    let mut rule_visitor = RuleVisitor::new();
-
-    // Visit the stylesheet to collect URL dependencies
-    stylesheet
-        .visit(&mut url_visitor)
-        .map_err(|_| "URL visiting failed")?;
-
-    // Visit the stylesheet to collect rule dependencies
-    stylesheet
-        .visit(&mut rule_visitor)
-        .map_err(|_| "Rule visiting failed")?;
-
-    // Combine and return all dependencies
-    let mut dependencies: Vec<String> = url_visitor
-        .dependencies
-        .into_iter()
-        .filter(|dep| !dep.is_empty())
-        .collect();
-
-    dependencies.extend(
-        rule_visitor
-            .dependencies
-            .into_iter()
-            .filter(|dep| !dep.is_empty()),
-    );
-
-    Ok(dependencies)
 }

@@ -1,44 +1,47 @@
-use anyhow::{Context, Result};
 use std::path::PathBuf;
 
 use oxc::{
     allocator::Allocator,
-    ast::ast::{
-        Argument, CallExpression, ExportAllDeclaration, ExportNamedDeclaration, Expression, ImportDeclaration, StringLiteral, TaggedTemplateExpression, TemplateElement, TemplateLiteral
-    },
+    ast::ast::{ImportDeclaration, StringLiteral, TemplateElement},
     ast_visit::Visit,
     parser::{Parser, ParserReturn},
     span::SourceType,
 };
 
-pub fn parse_js_dependencies(
-    source_path: &PathBuf,
-) -> Result<Vec<String>> {
-    // load the file content
-    let source_text = std::fs::read_to_string(source_path)
-        .with_context(|| format!("Failed to read file: {:?}", source_path))?;
+use crate::errors::{DependencyError, DependencyResult};
 
-    // Memory arena where AST nodes are allocated.
-    let allocator = Allocator::default();
+pub fn dependencies_from_file(source_path: &PathBuf) -> DependencyResult<Vec<String>> {
+    let source_text = std::fs::read_to_string(source_path)?;
     // Infer source type (TS/JS/ESM/JSX/etc) based on file extension
     let source_type = SourceType::from_path(source_path).unwrap();
-    let mut errors = Vec::new();
+    dependencies_from_string(&source_text, source_type)
+}
+
+pub fn dependencies_from_string(
+    source_text: &String,
+    source_type: SourceType,
+) -> DependencyResult<Vec<String>> {
+    // Memory arena where AST nodes are allocated.
+    let allocator = Allocator::default();
 
     let ParserReturn {
         program,
         errors: parser_errors,
         panicked,
         ..
-    } = Parser::new(&allocator, &source_text, source_type).parse();
-    errors.extend(parser_errors);
+    } = Parser::new(&allocator, source_text, source_type).parse();
 
     if panicked {
-        for error in &errors {
-            println!("{error:?}");
-            panic!("Parsing failed.");
-        }
+        return Err(DependencyError::JsPanicParse);
     }
 
+    if !parser_errors.is_empty() {
+        let error_messages: Vec<String> =
+            parser_errors.iter().map(|e| format!("{:?}", e)).collect();
+        return Err(DependencyError::JsParse {
+            message: format!("Parser errors: {}", error_messages.join(", ")),
+        });
+    }
 
     let mut visitor = DependencyVisitor::new();
     visitor.visit_program(&program);
@@ -49,10 +52,6 @@ pub fn parse_js_dependencies(
         .filter(|dep| !dep.is_empty())
         .collect();
 
-    if source_path.ends_with("moz-breadcrumb-group.mjs") {
-        println!("Dependencies found in {}: {:?}", source_path.display(), dependencies);
-    }
-    
     Ok(dependencies)
 }
 
@@ -85,23 +84,6 @@ impl DependencyVisitor {
                 }
             }
         }
-    }
-
-    fn process_template_literal(&mut self, template: &TemplateLiteral) {
-        // Reconstruct the template literal content
-        let mut html_content = String::new();
-
-        for (i, quasi) in template.quasis.iter().enumerate() {
-            html_content.push_str(&quasi.value.raw);
-
-            // Add placeholder for expressions (we can't evaluate them, so use placeholder)
-            if i < template.expressions.len() {
-                html_content.push_str("${...}");
-            }
-        }
-
-        // Extract CSS links using the updated regex
-        self.extract_css_links_from_html(&html_content);
     }
 }
 

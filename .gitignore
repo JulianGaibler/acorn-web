@@ -4,3 +4,5 @@ target/
 .DS_Store
 firefox/
 dist/
+node_modules/
+.vscode/
