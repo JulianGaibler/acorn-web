@@ -1,7 +1,7 @@
 {
   "name": "acorn-web",
-  "version": "1.0.0",
-  "description": "A modern web component library built with Lit",
+  "version": "0.1.0",
+  "description": "Acorn components transformed to work outside of Firefox",
   "type": "module",
   "exports": {
     "./components/*": {
@@ -16,17 +16,7 @@
     "dist/"
   ],
   "sideEffects": false,
-  "keywords": [
-    "web-components",
-    "lit",
-    "esm",
-    "components"
-  ],
   "license": "MPL-2.0",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/FirefoxUX/acorn-web.git"
-  },
   "engines": {
     "node": ">=16"
   },
